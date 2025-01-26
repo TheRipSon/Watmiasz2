@@ -180,7 +180,6 @@ def build_graph_visual(adjacency_matrix, labeled_edges, root_window):
     canvas.get_tk_widget().pack(side='bottom', fill='both', expand=1)
 
 
-
 if __name__ == '__main__':
     # Retrieve algorithm flag from command-line arguments
     # Usage example: python script.py FF or python script.py EK
