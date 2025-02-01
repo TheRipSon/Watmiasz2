@@ -36,10 +36,7 @@ for city, info in city_data["cites"].items():
         # capacity example
         capacity_val = speed_lim * lanes
 
-        # If roads are truly one-way, only add this direction:
-        #    G.add_edge(city, end_city, ...)
-        #
-        # If roads are truly bidirectional, add both directions:
+        # If roads are bidirectional, add both directions:
         G.add_edge(
             city,
             end_city,
@@ -49,6 +46,135 @@ for city, info in city_data["cites"].items():
             number_of_lanes=lanes,
             capacity=capacity_val
         )
+        G.add_edge(
+            end_city,
+            city,
+            base_cost=base_cost,
+            road_length=road_length,
+            speed_limit=speed_lim,
+            number_of_lanes=lanes,
+            capacity=capacity_val
+        )
+
+###############################################################################
+# Draggable subgraph for multiple routes (SECOND GRAPH)
+###############################################################################
+def make_draggable_subgraph(H, routes, pos, colors):
+    """
+    Make a draggable graph for the subgraph with routes shown in different colors.
+    Off-route edges are in gray.
+    """
+
+    root = tk.Tk()
+    root.title("Routes Visualization (Draggable)")
+
+    figure, ax = plt.subplots(figsize=(6, 5))
+    ax.axis('off')
+
+    # Gather all edges used by the routes so we can color them differently
+    route_edges_set = set()
+    for idx, path in enumerate(routes):
+        for i in range(len(path) - 1):
+            route_edges_set.add((path[i], path[i + 1]))
+
+    # Draw all nodes
+    nx.draw_networkx_nodes(H, pos, ax=ax, node_color='lightblue')
+    nx.draw_networkx_labels(H, pos, ax=ax)
+
+    # Draw each route with a different color
+    for idx, path in enumerate(routes):
+        edge_pairs = [(path[i], path[i + 1]) for i in range(len(path) - 1)]
+        nx.draw_networkx_edges(
+            H,
+            pos,
+            edgelist=edge_pairs,
+            edge_color=[colors(idx)],
+            arrows=True,
+            arrowstyle='-|>',
+            arrowsize=15,
+            ax=ax,
+        )
+
+    # Draw edges not in the route set in gray
+    off_route_edges = [(u, v) for (u, v) in H.edges() if (u, v) not in route_edges_set]
+    nx.draw_networkx_edges(
+        H,
+        pos,
+        edgelist=off_route_edges,
+        edge_color='gray',
+        arrows=True,
+        arrowstyle='-|>',
+        arrowsize=15,
+        ax=ax
+    )
+
+    dragged_node = None
+
+    def on_press(event):
+        nonlocal dragged_node
+        if event.inaxes != ax:
+            return
+        x_click, y_click = event.xdata, event.ydata
+        # Find the closest node
+        for n, (xx, yy) in pos.items():
+            dist = np.sqrt((x_click - xx) ** 2 + (y_click - yy) ** 2)
+            if dist < 0.1:
+                dragged_node = n
+                break
+
+    def on_motion(event):
+        if event.inaxes != ax:
+            return
+        if dragged_node is not None:
+            # Update node position
+            pos[dragged_node] = (event.xdata, event.ydata)
+            ax.clear()
+            ax.axis('off')
+
+            # Redraw nodes
+            nx.draw_networkx_nodes(H, pos, ax=ax, node_color='lightblue')
+            nx.draw_networkx_labels(H, pos, ax=ax)
+
+            # Redraw route edges
+            for idx, path in enumerate(routes):
+                edge_pairs = [(path[i], path[i + 1]) for i in range(len(path) - 1)]
+                nx.draw_networkx_edges(
+                    H,
+                    pos,
+                    edgelist=edge_pairs,
+                    edge_color=[colors(idx)],
+                    arrows=True,
+                    arrowstyle='-|>',
+                    arrowsize=15,
+                    ax=ax,
+                )
+
+            # Redraw off-route edges
+            off_route_edges = [(u, v) for (u, v) in H.edges() if (u, v) not in route_edges_set]
+            nx.draw_networkx_edges(
+                H,
+                pos,
+                edgelist=off_route_edges,
+                edge_color='gray',
+                arrows=True,
+                arrowstyle='-|>',
+                arrowsize=15,
+                ax=ax
+            )
+
+            canvas.draw()
+
+    def on_release(event):
+        nonlocal dragged_node
+        dragged_node = None
+
+    canvas = FigureCanvasTkAgg(figure, master=root)
+    canvas.mpl_connect("button_press_event", on_press)
+    canvas.mpl_connect("motion_notify_event", on_motion)
+    canvas.mpl_connect("button_release_event", on_release)
+    canvas.get_tk_widget().pack(side="top", fill="both", expand=True)
+
+    return root, figure
 
 ###############################################################################
 # Penalty-based iterative approach (unique routes)
@@ -62,12 +188,11 @@ def find_k_routes_with_penalties(graph, source, target, k=4, alpha=1.0, max_atte
     while len(routes) < k and attempts < max_attempts:
         attempts += 1
 
-        # Build a new penalized graph, but for path-finding we can treat as undirected
-        # (if you want purely directed path-finding, use DiGraph + directed shortest_path)
+        # Build a new penalized graph for path-finding (we'll treat it as undirected here)
         H = nx.Graph()
         for (u, v) in graph.edges():
             base = graph[u][v]['base_cost']
-            penalty_factor = 1.0 + alpha*(usage_count[u] + usage_count[v])
+            penalty_factor = 1.0 + alpha * (usage_count[u] + usage_count[v])
             cost = base * penalty_factor
 
             H.add_node(u, pos=graph.nodes[u]['pos'])
@@ -75,7 +200,6 @@ def find_k_routes_with_penalties(graph, source, target, k=4, alpha=1.0, max_atte
             H.add_edge(u, v, cost=cost)
 
         try:
-            # shortest_path in an undirected Graph
             path = nx.shortest_path(H, source=source, target=target, weight='cost')
         except nx.NetworkXNoPath:
             break
@@ -87,7 +211,7 @@ def find_k_routes_with_penalties(graph, source, target, k=4, alpha=1.0, max_atte
         routes.append(path)
         unique_paths.add(path_tuple)
 
-        # Update usage count for these nodes
+        # Update usage count for nodes in this path
         for node in path:
             usage_count[node] += 1
 
@@ -127,7 +251,7 @@ def find_augmenting_path_bfs(cap_matrix, flow_matrix, source, sink):
 
 def edmonds_karp(cap_matrix, source, sink):
     n = len(cap_matrix)
-    flow_matrix = [[0]*n for _ in range(n)]
+    flow_matrix = [[0] * n for _ in range(n)]
     path = find_augmenting_path_bfs(cap_matrix, flow_matrix, source, sink)
 
     path_count = 0
@@ -140,7 +264,6 @@ def edmonds_karp(cap_matrix, source, sink):
             flow_matrix[u][v] += flow
             flow_matrix[v][u] -= flow
 
-        # Optionally debug:
         print(f"Found augmenting path #{path_count} -> Flow added: {flow}")
 
         path = find_augmenting_path_bfs(cap_matrix, flow_matrix, source, sink)
@@ -154,7 +277,7 @@ def edmonds_karp(cap_matrix, source, sink):
 def build_capacity_matrix(graph, node_list):
     idx_map = {node: i for i, node in enumerate(node_list)}
     n = len(node_list)
-    matrix = [[0]*n for _ in range(n)]
+    matrix = [[0] * n for _ in range(n)]
 
     for (u, v) in graph.edges():
         cap = graph[u][v].get('capacity', 0)
@@ -165,7 +288,7 @@ def build_capacity_matrix(graph, node_list):
     return matrix
 
 ###############################################################################
-# Draggable flow figure
+# Draggable flow figure (THIRD GRAPH)
 ###############################################################################
 def make_draggable_graph(H, edge_labels):
     """
@@ -176,18 +299,17 @@ def make_draggable_graph(H, edge_labels):
     root = tk.Tk()
     root.title("Flow Visualization (Draggable)")
 
-    figure, ax = plt.subplots(figsize=(6,5))
+    figure, ax = plt.subplots(figsize=(6, 5))
     ax.axis('off')
 
-    # Use each node's existing 'pos' attribute
     pos = nx.get_node_attributes(H, 'pos')
 
-    # Draw a directed graph with arrows
     nx.draw_networkx_nodes(H, pos, ax=ax, node_color='lightblue')
     nx.draw_networkx_labels(H, pos, ax=ax)
-    # To show arrows clearly, you might need arrowstyle and arrowsize
-    nx.draw_networkx_edges(H, pos, ax=ax, edge_color='green', arrows=True, arrowstyle='-|>', arrowsize=15)
-    nx.draw_networkx_edge_labels(H, pos, edge_labels=edge_labels, font_color='red', ax=ax)
+    nx.draw_networkx_edges(H, pos, ax=ax, edge_color='green',
+                           arrows=True, arrowstyle='-|>', arrowsize=15)
+    nx.draw_networkx_edge_labels(H, pos, edge_labels=edge_labels,
+                                 font_color='red', ax=ax)
 
     dragged_node = None
 
@@ -198,7 +320,7 @@ def make_draggable_graph(H, edge_labels):
         x_click, y_click = event.xdata, event.ydata
         # find closest node
         for n, (xx, yy) in pos.items():
-            dist = np.sqrt((x_click - xx)**2 + (y_click - yy)**2)
+            dist = np.sqrt((x_click - xx) ** 2 + (y_click - yy) ** 2)
             if dist < 0.1:
                 dragged_node = n
                 break
@@ -212,8 +334,10 @@ def make_draggable_graph(H, edge_labels):
             ax.axis('off')
             nx.draw_networkx_nodes(H, pos, ax=ax, node_color='lightblue')
             nx.draw_networkx_labels(H, pos, ax=ax)
-            nx.draw_networkx_edges(H, pos, ax=ax, edge_color='green', arrows=True, arrowstyle='-|>', arrowsize=15)
-            nx.draw_networkx_edge_labels(H, pos, edge_labels=edge_labels, font_color='red', ax=ax)
+            nx.draw_networkx_edges(H, pos, ax=ax, edge_color='green',
+                                   arrows=True, arrowstyle='-|>', arrowsize=15)
+            nx.draw_networkx_edge_labels(H, pos, edge_labels=edge_labels,
+                                         font_color='red', ax=ax)
             canvas.draw()
 
     def on_release(event):
@@ -239,7 +363,8 @@ def interactive_map(G, alpha=1.0, timeout=5):
     # Draw the entire directed graph
     nx.draw_networkx_nodes(G, pos, ax=ax, node_color='lightblue')
     nx.draw_networkx_labels(G, pos, ax=ax)
-    nx.draw_networkx_edges(G, pos, ax=ax, edge_color='gray', arrows=True, arrowstyle='-|>', arrowsize=15)
+    nx.draw_networkx_edges(G, pos, ax=ax, edge_color='gray',
+                           arrows=True, arrowstyle='-|>', arrowsize=15)
 
     selected_cities = []
 
@@ -279,7 +404,8 @@ def interactive_map(G, alpha=1.0, timeout=5):
             def route_finding_task():
                 return find_k_routes_with_penalties(G, source, target, k, alpha=alpha)
 
-            print(f"Finding up to {k} unique routes between {source} and {target} with alpha={alpha}, timeout={timeout}s")
+            print(f"Finding up to {k} unique routes between {source} and {target} "
+                  f"with alpha={alpha}, timeout={timeout}s")
             routes = run_with_timeout(route_finding_task, timeout=timeout)
 
             if routes is None:
@@ -291,60 +417,27 @@ def interactive_map(G, alpha=1.0, timeout=5):
 
             # Collect route nodes & edges
             route_nodes = set()
-            route_edges = set()  # specifically the edges used in each route
             for idx, path in enumerate(routes, start=1):
                 print(f"Route {idx}: {path}")
                 route_nodes.update(path)
-                # build pairs of consecutive nodes
-                for i in range(len(path) - 1):
-                    edge_pair = (path[i], path[i+1])
-                    route_edges.add(edge_pair)  # (u->v)
 
-            # Build subgraph among those nodes
+            # Build subgraph of the route nodes
             H = nx.DiGraph()
             for n in route_nodes:
-                # keep the same position as in G
                 H.add_node(n, pos=G.nodes[n]['pos'])
             for (u, v) in G.edges():
                 if u in route_nodes and v in route_nodes:
                     H.add_edge(u, v, **G[u][v])
 
-            # Show subgraph: color route edges differently
-            fig2, ax2 = plt.subplots()
-            plt.title(f"Subgraph for up to {k} penalized routes between {source} and {target}")
+            # Make the second graph draggable, with each route in a different color
             pos_sub = nx.get_node_attributes(H, 'pos')
+            colors = plt.cm.get_cmap('tab10', len(routes))
+            root, figure = make_draggable_subgraph(H, routes, pos_sub, colors)
+            figure.suptitle(f"Subgraph for up to {k} penalized routes\n"
+                            f"{source} -> {target}", fontsize=12)
+            root.mainloop()
 
-            # We'll split the edges into "on-route" (red) vs "other" (gray)
-            on_route_edges = []
-            off_route_edges = []
-            for (u, v) in H.edges():
-                if (u, v) in route_edges:
-                    on_route_edges.append((u, v))
-                else:
-                    off_route_edges.append((u, v))
-
-            nx.draw_networkx_nodes(H, pos_sub, ax=ax2, node_color='lightblue')
-            nx.draw_networkx_labels(H, pos_sub, ax=ax2)
-
-            # Draw route edges in red
-            nx.draw_networkx_edges(
-                H, pos_sub,
-                edgelist=on_route_edges,
-                edge_color='red',
-                arrows=True, arrowstyle='-|>', arrowsize=15,
-                ax=ax2
-            )
-            # Draw other edges in gray
-            nx.draw_networkx_edges(
-                H, pos_sub,
-                edgelist=off_route_edges,
-                edge_color='gray',
-                arrows=True, arrowstyle='-|>', arrowsize=15,
-                ax=ax2
-            )
-            plt.show()
-
-            # Max flow (source->target) within H
+            # Prepare max flow on subgraph
             node_list = list(route_nodes)
             if source not in node_list or target not in node_list:
                 print("Source/target not found in subgraph. Skipping max flow.")
@@ -372,16 +465,19 @@ def interactive_map(G, alpha=1.0, timeout=5):
                         if fwd > rev:
                             actual_flow = fwd - rev
                             if actual_flow > 0:
-                                net_flow_labels[(node_list[i], node_list[j])] = f"{actual_flow}/{cap}"
+                                # dividing by 2 because roads are bidirectional,
+                                # and Edmonds-Karp effectively doubles them
+                                net_flow_labels[(node_list[i], node_list[j])] = f"{actual_flow/2}/{cap}"
                         else:
                             actual_flow = rev - fwd
                             if actual_flow > 0:
-                                net_flow_labels[(node_list[j], node_list[i])] = f"{actual_flow}/{cap}"
+                                net_flow_labels[(node_list[j], node_list[i])] = f"{actual_flow/2}/{cap}"
 
-            # Draw final flow figure (draggable), using each node's 'pos'
-            root, figure = make_draggable_graph(H, net_flow_labels)
-            figure.suptitle(f"Flow distribution (MaxFlow={max_flow_val})", fontsize=12)
-            root.mainloop()
+            # THIRD GRAPH: Draggable flow figure
+            root_flow, figure_flow = make_draggable_graph(H, net_flow_labels)
+            figure_flow.suptitle(f"Flow distribution {source} -> {target}"
+                                 f"\n(MaxFlow={max_flow_val})", fontsize=12)
+            root_flow.mainloop()
 
     fig.canvas.mpl_connect('button_press_event', on_click)
     plt.show()
@@ -390,5 +486,5 @@ def interactive_map(G, alpha=1.0, timeout=5):
 # Main
 ###############################################################################
 if __name__ == "__main__":
-    # Start interactive picking
+    # Start interactive picking on the main map
     interactive_map(G, alpha=1.0, timeout=5)

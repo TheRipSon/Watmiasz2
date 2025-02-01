@@ -77,7 +77,7 @@ def parse_road_summary(summary):
     elif 'E' in summary:
         return 90, 1
     else:
-        # Fallback if we find none of the letters above
+        # Fallback if find none of the letters above
         return 50, 1
 
 
@@ -165,7 +165,7 @@ def parse_route_and_split_on_cities(
                     if not city_is_near_route(city_coord, route_coords, threshold):
                         continue
 
-                    # --- NEW LOGIC: Compare segment_distance to center-distance ---
+                    # Compare segment_distance to center-distance
                     center_distance = haversine_distance(
                         cities_coordinates[current_start_city],
                         city_coord
